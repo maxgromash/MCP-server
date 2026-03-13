@@ -1,84 +1,50 @@
 import asyncio
 import aiosqlite
-import time
-import httpx
+import os
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("Advanced-Scheduler-Server")
-DB_PATH = "/Users/mgrebenshchikov/MCP-server/mcp-facts-server/mcp_data.db"
+mcp = FastMCP("Pipeline-Server")
+# Твои актуальные пути
+BASE_DIR = "/Users/mgrebenshchikov/MCP-server/mcp-facts-server"
+DB_PATH = os.path.join(BASE_DIR, "mcp_data.db")
 
-_initialized = False
-
-async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS periodic_data (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
-        await db.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, due_time REAL)")
-        await db.commit()
-
-async def background_collector():
-    while True:
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get("https://uselessfacts.jsph.pl/api/v2/facts/random")
-                if response.status_code == 200:
-                    fact = response.json().get("text")
-                    async with aiosqlite.connect(DB_PATH) as db:
-                        await db.execute("INSERT INTO periodic_data (content) VALUES (?)", (fact,))
-                        await db.commit()
-        except Exception:
-            pass
-        await asyncio.sleep(15) # Ускорили для теста до 15 сек
-
-async def ensure_initialized():
-    global _initialized
-    if not _initialized:
-        await init_db()
-        asyncio.create_task(background_collector())
-        _initialized = True
-
-# --- НОВЫЙ ИНСТРУМЕНТ: ОЧИСТКА ---
+# 1. ИНСТРУМЕНТ: ПОИСК (ПОЛУЧЕНИЕ ДАННЫХ)
 @mcp.tool()
-async def clear_database() -> str:
-    """Полностью удаляет все собранные факты и напоминания."""
-    await ensure_initialized()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM periodic_data")
-        await db.execute("DELETE FROM reminders")
-        await db.commit()
-    return "База данных успешно очищена. Шедулер начнет собирать данные заново."
+async def search_info(topic: str) -> str:
+    """Ищет информацию по заданной теме (симуляция)."""
+    # Здесь могла бы быть логика поиска через SerpAPI или DuckDuckGo
+    simulated_data = {
+        "android": "Android 15 внедряет новые API для работы с ИИ на уровне системы.",
+        "mcp": "Model Context Protocol позволяет ИИ использовать локальные инструменты.",
+        "kotlin": "Kotlin Multiplatform (KMM) активно развивается для iOS и Android."
+    }
+    result = simulated_data.get(topic.lower(), f"Информации по теме {topic} не найдено.")
+    return f"Результат поиска для '{topic}': {result}"
 
+# 2. ИНСТРУМЕНТ: СУММАРИЗАЦИЯ (ОБРАБОТКА)
 @mcp.tool()
-async def add_reminder(text: str, delay_seconds: int) -> str:
-    await ensure_initialized()
-    due_time = time.time() + delay_seconds
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO reminders (text, due_time) VALUES (?, ?)", (text, due_time))
-        await db.commit()
-    return f"Записал: '{text}'."
+async def summarize_data(raw_text: str) -> str:
+    """Принимает текст и возвращает краткую выжимку (Summary)."""
+    # Симулируем обработку: добавляем префикс и приводим к краткому виду
+    if len(raw_text) < 10:
+        return f"Текст слишком короткий для суммаризации: {raw_text}"
 
+    summary = f"SUMMARY: {raw_text.split(':')[-1].strip()}"
+    return summary
+
+# 3. ИНСТРУМЕНТ: СОХРАНЕНИЕ (SAVE TO FILE)
 @mcp.tool()
-async def get_summary() -> str:
-    await ensure_initialized()
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Считаем общее кол-во, чтобы видеть рост
-        async with db.execute("SELECT COUNT(*) FROM periodic_data") as c:
-            total_facts = (await c.fetchone())[0]
+async def save_to_pipeline_file(filename: str, content: str) -> str:
+    """Сохраняет результат обработки в файл в директории проекта."""
+    # Ограничиваем запись только папкой проекта для безопасности
+    safe_path = os.path.join(BASE_DIR, filename)
 
-        async with db.execute("SELECT content FROM periodic_data ORDER BY id DESC LIMIT 5") as c:
-            facts = await c.fetchall()
-
-        # Показываем и старые, и новые напоминания (последние 5)
-        async with db.execute("SELECT text FROM reminders ORDER BY id DESC LIMIT 5") as c:
-            reminders = await c.fetchall()
-
-    res = [f"### СТАТИСТИКА АГЕНТА (Всего в базе: {total_facts}) ###\n"]
-    res.append("📋 **Последние 5 фактов:**")
-    res.extend([f"- {f[0]}" for f in facts] if facts else ["- Данных пока нет"])
-
-    res.append("\n⏰ **Последние напоминания:**")
-    res.extend([f"- {r[0]}" for r in reminders] if reminders else ["- Пусто"])
-
-    return "\n".join(res)
+    try:
+        with open(safe_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Данные успешно сохранены в файл: {safe_path}"
+    except Exception as e:
+        return f"Ошибка при сохранении: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()
